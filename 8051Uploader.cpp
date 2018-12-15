@@ -1,17 +1,17 @@
-/
-
 #include "stdafx.h"
 //define FTD2XXSTATIC
 #include <windows.h>
 #include "ftd2xx.h"
 #include "ihex.h"
 
-#define dummyData 0xAA
+#define COMMAND_END 0xAA
 
-#define RST 0
-#define MISO 1
-#define MOSI 2
-#define _CLK 3
+#define BAUD_RATE 9600
+
+#define RST_8051 0
+#define MISO_8051 1
+#define MOSI_8051 2
+#define CLK_8051 3
 
 #define PIN_TX  0x01
 #define PIN_RX  0x02
@@ -22,7 +22,10 @@
 #define PIN_DCD 0x40
 #define PIN_RI  0x80
 
-typedef union Pins {
+#define LOW 0
+#define HIGH 1
+
+typedef union pinmap_t {
 	struct {
 		unsigned rst : 1;       // TX
 		unsigned mosi : 1;      // RX
@@ -34,47 +37,38 @@ typedef union Pins {
 	byte pins;
 };
 
-Pins pins;
+pinmap_t ftdi_pins;
 
-FT_HANDLE handle;
+FT_HANDLE ftdi_chip;
 
-void digitalWrite(byte pin, byte value) {
+void setPin(byte pin, byte value) {
 	static DWORD b = 0;
 	switch (pin) {
-		case MISO: pins.miso = value; break;
-		case MOSI: pins.mosi = value; break;
-		case _CLK: pins.clk = value; break;
-		case RST: pins.rst  = value; break;
+		case MISO_8051: ftdi_pins.miso = value; break;
+		case MOSI_8051: ftdi_pins.mosi = value; break;
+		case CLK_8051: ftdi_pins.clk = value; break;
+		case RST_8051: ftdi_pins.rst  = value; break;
 	}
-	FT_Write(handle, &pins, 1, &b);
+	FT_Write(ftdi_chip, &ftdi_pins, 1, &b);
 }
 
-byte digitalRead(byte pin) {
+byte getPin(byte pin) {
 	static DWORD b = 0;
 	byte buffer = 0;
-	FT_GetBitMode(handle, &buffer);
+	FT_GetBitMode(ftdi_chip, &buffer);
 	buffer = buffer | 0x0F;
-	pins.pins |= buffer;
-	pins.pins &= buffer;
+	ftdi_pins.pins |= buffer;
+	ftdi_pins.pins &= buffer;
 	switch (pin)
 	{
-		case MISO: return pins.miso;
-		case MOSI: return pins.mosi;
-		case _CLK: return pins.clk;
-		case RST: return pins.rst;
+		case MISO_8051: return ftdi_pins.miso;
+		case MOSI_8051: return ftdi_pins.mosi;
+		case CLK_8051: return ftdi_pins.clk;
+		case RST_8051: return ftdi_pins.rst;
 	}
 	return 0;
 	
 }
-
-void delayMicroseconds(DWORD n) {	
-	Sleep(n);	
-}
-
-void delay(DWORD n) {
-	Sleep(n);
-}
-
 
 unsigned char SendSPI(unsigned char data)
 {
@@ -84,30 +78,30 @@ unsigned char SendSPI(unsigned char data)
 
 	for (int ctr = 0; ctr < 7; ctr++)
 	{
-		if (intData & 0x80) digitalWrite(MOSI, 1);
-		else digitalWrite(MOSI, 0);
+		if (intData & 0x80) setPin(MOSI_8051, HIGH);
+		else setPin(MOSI_8051, LOW);
 
-		digitalWrite(_CLK, 1);
-		delayMicroseconds(1);
+		setPin(CLK_8051, HIGH);
+		Sleep(1);
 
-		t = digitalRead(MISO);
-		digitalWrite(_CLK, 0);
+		t = getPin(MISO_8051);
+		setPin(CLK_8051, LOW);
 
 		if (t) retval |= 1; else retval &= 0xFE;
 		retval <<= 1;
 		intData <<= 1;
-		delayMicroseconds(1);
+		Sleep(1);
 	}
 
 
-	if (intData & 0x80) digitalWrite(MOSI, 1);
-	else digitalWrite(MOSI, 0);
+	if (intData & 0x80) setPin(MOSI_8051, HIGH);
+	else setPin(MOSI_8051, LOW);
 
-	digitalWrite(_CLK, 1);
-	delayMicroseconds(1);
+	setPin(CLK_8051, HIGH);
+	Sleep(1);
 
-	t = digitalRead(MISO);
-	digitalWrite(_CLK, 0);
+	t = getPin(MISO_8051);
+	setPin(CLK_8051, LOW);
 
 	if (t) retval |= 1;
 	else retval &= 0xFE;
@@ -120,18 +114,18 @@ byte progEnable()
 {
 	SendSPI(0xAC);
 	SendSPI(0x53);
-	SendSPI(dummyData);
-	return SendSPI(dummyData);
+	SendSPI(COMMAND_END);
+	return SendSPI(COMMAND_END);
 }
 
 void eraseChip()
 {
 	SendSPI(0xAC);
 	SendSPI(0x9F);
-	SendSPI(dummyData);
-	SendSPI(dummyData);
+	SendSPI(COMMAND_END);
+	SendSPI(COMMAND_END);
 
-	delay(520);
+	Sleep(520);
 }
 
 byte readProgmem(byte AH, byte AL)
@@ -140,7 +134,7 @@ byte readProgmem(byte AH, byte AL)
 	SendSPI(0x20);
 	SendSPI(AH);
 	SendSPI(AL);
-	return SendSPI(dummyData);
+	return SendSPI(COMMAND_END);
 }
 
 void writeProgmem(byte AH, byte AL, byte data)
@@ -155,16 +149,16 @@ void writeLockBits(byte lockByte)
 {
 	SendSPI(0xAC);
 	SendSPI(lockByte);
-	SendSPI(dummyData);
-	SendSPI(dummyData);
+	SendSPI(COMMAND_END);
+	SendSPI(COMMAND_END);
 }
 
 byte readLockBits()
 {
 	SendSPI(0x24);
-	SendSPI(dummyData);
-	SendSPI(dummyData);
-	return SendSPI(dummyData);
+	SendSPI(COMMAND_END);
+	SendSPI(COMMAND_END);
+	return SendSPI(COMMAND_END);
 }
 
 byte readSign(byte AH, byte AL)
@@ -172,66 +166,79 @@ byte readSign(byte AH, byte AL)
 	SendSPI(0x28);
 	SendSPI(AH);
 	SendSPI(AL);
-	return SendSPI(dummyData);
+	return SendSPI(COMMAND_END);
 }
 
 
 int main(int argc, char ** argv)
 {
 	
-	DWORD devIndex = 0; // first device 
-	char Buffer[255]; // more than enough room! 
-	pins.pins = 0xF1;
-	pins.clk = 1;
+	DWORD devIndex = 0; 
+	char Buffer[255];
+	ftdi_pins.pins = 0xF1;
+	ftdi_pins.clk = HIGH;
 	DWORD p = 0;
 	byte e1 = 0xff;
 	byte e2 = 0;
+
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 	SetConsoleTextAttribute(hConsole, 7);
-	if (argc < 2) return 1;
-	int bytes = load_file(argv[1]);
-	byte b = memory[0];
+	if (argc < 2) {
+		printf("Please specify the hex file\n");
+		return 1;
+	}
+
+	
 	FT_STATUS ftStatus = FT_ListDevices((PVOID)devIndex, Buffer, FT_LIST_BY_INDEX | FT_OPEN_BY_SERIAL_NUMBER);
 	if (ftStatus == FT_OK) {
-		ftStatus = FT_OpenEx(Buffer, FT_OPEN_BY_SERIAL_NUMBER, &handle);
-		FT_SetBitMode(handle, PIN_TX | PIN_RX | PIN_CTS, 1);
-		FT_SetBaudRate(handle, 9600);
-		digitalWrite(RST, 0);
-		digitalWrite(MOSI, 0);
-		digitalWrite(_CLK, 0);
-		digitalWrite(RST, 1);
+
+		int bytes = load_file(argv[1]);
+
+		ftStatus = FT_OpenEx(Buffer, FT_OPEN_BY_SERIAL_NUMBER, &ftdi_chip);
+		FT_SetBitMode(ftdi_chip, PIN_TX | PIN_RX | PIN_CTS, 1); // BIT BANG MODE
+		FT_SetBaudRate(ftdi_chip, BAUD_RATE);						 
+
+		setPin(RST_8051, LOW);
+		setPin(MOSI_8051, LOW);
+		setPin(CLK_8051, LOW);
+		setPin(RST_8051, HIGH);
+		
 		Sleep(500);
-		printf("%x\n", progEnable());
-		Sleep(100);
-		Sleep(1000);
+		printf("%x\n", progEnable());		
+		Sleep(1100);
 
 		eraseChip();
+
 		for (int i = from_addr; i < to_addr + 1; i++) {
 			printf("%02X", readProgmem(0, i));
 		}
 		printf("\n");
-		if (1)
-		{
-			for (int i = from_addr; i < to_addr + 1; i++) {
-				printf("%02X", memory[i]);
-			}
-			printf("\n");
-			for (int i = from_addr; i < to_addr+1; i++) {
-				writeProgmem(0, i, memory[i]);
-				printf("%02X", readProgmem(0, i));
-			}
-			printf("\n");
+
+
+		for (int i = from_addr; i < to_addr + 1; i++) {
+			printf("%02X", memory[i]);
 		}
+		printf("\n");
+		
+		// write memory
+		for (int i = from_addr; i < to_addr+1; i++) {
+			writeProgmem(0, i, memory[i]);
+			printf("%02X", readProgmem(0, i));
+		}
+		printf("\n");
+		
+
 		Sleep(1000);
-		digitalWrite(RST, 0);
+		setPin(RST_8051, LOW);
 		Sleep(500);
+
+		FT_Close(ftdi_chip);
+
 		getchar();
-		//FT_SetBitMode(handle, 0x00, 0xFF);
-		//FT_ResetDevice(handle);
-		FT_Close(handle);	
 	}
 	else {
-		
+		printf("Can't open FTDI chip\n");
+		return 1;
 	}
 
 	return 0;
